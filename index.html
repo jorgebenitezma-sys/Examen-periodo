@@ -324,9 +324,9 @@ const URL_GOOGLE_SHEETS = "https://script.google.com/macros/s/AKfycbykdVVbCJejD0
      momento (ver el comentario junto a "document.exitFullscreen()" dentro de
      la función "entregarExamen" más abajo).
 ------------------------------------------------------------------------------------- */
-const SEGUNDOS_SALIDA_SIGNIFICATIVA = 2;
-const LIMITE_SALIDAS_SOSPECHOSAS = 2;
-const LIMITE_SEGUNDOS_SOSPECHOSOS = 5;
+const SEGUNDOS_SALIDA_SIGNIFICATIVA = 3;
+const LIMITE_SALIDAS_SOSPECHOSAS = 3;
+const LIMITE_SEGUNDOS_SOSPECHOSOS = 60;
 const USAR_PANTALLA_COMPLETA = true;
 
 /* -------------------------------------------------------------------------------------
@@ -1018,7 +1018,14 @@ function resolverBloqueoPantallaCompleta(){
    resuelve el bloqueo (ver "resolverBloqueoPantallaCompleta"). */
 let bloqueoPorSalidaActivo = false;
 function contarSalidaYBloquear(mensajeBitacora, segundosDetectadosSinBloqueo, horaInicioReal){
-  if(USAR_PANTALLA_COMPLETA){
+  // El bloqueo con el botón "Volver a pantalla completa" solo tiene sentido
+  // si este navegador/dispositivo REALMENTE puede conceder pantalla completa
+  // (PANTALLA_COMPLETA_SOPORTADA). El caso real más importante: en iPhone,
+  // Safari no soporta la pantalla completa del todo (solo para <video>), así
+  // que si mostráramos ahí el mismo bloqueo, el botón jamás podría funcionar
+  // y el alumno quedaría atrapado para siempre. En esos casos SÍ se cuenta
+  // la salida (para tu control), pero sin el bloqueo imposible de resolver.
+  if(USAR_PANTALLA_COMPLETA && PANTALLA_COMPLETA_SOPORTADA){
     if(!bloqueoPorSalidaActivo){
       bloqueoPorSalidaActivo = true;
       sesionActual.salidas++;
@@ -1027,9 +1034,10 @@ function contarSalidaYBloquear(mensajeBitacora, segundosDetectadosSinBloqueo, ho
     }
     mostrarBloqueoPantallaCompleta(horaInicioReal);
   } else {
-    // Sin exigencia de pantalla completa no hay bloqueo que resolver con un
-    // clic, así que aquí el tiempo fuera se suma directo (lo que ya haya
-    // detectado quien llamó a esta función) y cada salida cuenta aparte.
+    // Sin exigencia de pantalla completa (o sin soporte del navegador) no hay
+    // bloqueo que resolver con un clic, así que aquí el tiempo fuera se suma
+    // directo (lo que ya haya detectado quien llamó a esta función) y cada
+    // salida cuenta aparte.
     sesionActual.salidas++;
     sesionActual.tiempoFueraTotal += (segundosDetectadosSinBloqueo || 0);
     registrarEvento(mensajeBitacora);
