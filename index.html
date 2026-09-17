@@ -231,9 +231,10 @@
 
 <div class="bloqueo-pantalla-completa oculto" id="bloqueo-pantalla-completa">
   <div class="bloqueo-pantalla-completa-caja">
-    <h2>⚠️ Saliste de pantalla completa</h2>
-    <p>Esto quedó registrado. El examen sigue corriendo (el cronómetro no se detiene) mientras esta pantalla esté abierta.</p>
+    <h2 id="bloqueo-pantalla-completa-titulo">⚠️ Saliste de pantalla completa</h2>
+    <p id="bloqueo-pantalla-completa-texto">Esto quedó registrado. El examen sigue corriendo (el cronómetro no se detiene) mientras esta pantalla esté abierta.</p>
     <button id="btn-volver-pantalla-completa">🔒 Volver a pantalla completa</button>
+    <p id="link-continuar-sin-pantalla-completa" class="oculto" style="margin-top:14px;"><a href="#" id="btn-continuar-sin-pantalla-completa">Continuar sin pantalla completa</a></p>
   </div>
 </div>
 
@@ -324,9 +325,9 @@ const URL_GOOGLE_SHEETS = "https://script.google.com/macros/s/AKfycbykdVVbCJejD0
      momento (ver el comentario junto a "document.exitFullscreen()" dentro de
      la función "entregarExamen" más abajo).
 ------------------------------------------------------------------------------------- */
-const SEGUNDOS_SALIDA_SIGNIFICATIVA = 2;
-const LIMITE_SALIDAS_SOSPECHOSAS = 2;
-const LIMITE_SEGUNDOS_SOSPECHOSOS = 10;
+const SEGUNDOS_SALIDA_SIGNIFICATIVA = 3;
+const LIMITE_SALIDAS_SOSPECHOSAS = 3;
+const LIMITE_SEGUNDOS_SOSPECHOSOS = 60;
 const USAR_PANTALLA_COMPLETA = true;
 
 /* -------------------------------------------------------------------------------------
@@ -960,6 +961,54 @@ function salirDePantallaCompleta(){
   }
 }
 
+/* Muestra el aviso de pantalla completa con el mensaje adecuado según la causa:
+   - "salida": el alumno SÍ había entrado a pantalla completa y salió (Esc, etc.).
+   - "nunca_inicio": el navegador no la activó automáticamente al iniciar el examen
+     (esto puede pasar en Safari/Firefox si el intento se hace después de una
+     espera, o simplemente porque el navegador decidió no concederla). En este
+     caso se ofrece además la opción de continuar sin ella, para no dejar al
+     alumno atorado si su navegador de verdad no coopera. */
+function mostrarAvisoPantallaCompleta(tipo){
+  const titulo = document.getElementById("bloqueo-pantalla-completa-titulo");
+  const texto = document.getElementById("bloqueo-pantalla-completa-texto");
+  const linkContinuar = document.getElementById("link-continuar-sin-pantalla-completa");
+  if(tipo === "nunca_inicio"){
+    titulo.textContent = "🔒 Activa la pantalla completa";
+    texto.textContent = "Este examen funciona mejor en pantalla completa, pero tu navegador no la activó automáticamente. Haz clic en el botón para activarla tú mismo (un clic directo sí lo permite).";
+    linkContinuar.classList.remove("oculto");
+  } else {
+    titulo.textContent = "⚠️ Saliste de pantalla completa";
+    texto.textContent = "Esto quedó registrado. El examen sigue corriendo (el cronómetro no se detiene) mientras esta pantalla esté abierta.";
+    linkContinuar.classList.add("oculto");
+  }
+  document.getElementById("bloqueo-pantalla-completa").classList.remove("oculto");
+}
+
+/* Se llama justo después de que "iniciarInterfazExamen" ya intentó pedir pantalla
+   completa. Le da un instante al navegador para resolver esa solicitud y, si
+   después de ese instante el examen sigue sin estar en pantalla completa,
+   asume que el intento automático falló (por ejemplo, porque el clic del
+   alumno quedó "usado" al cruzar una espera de red antes de llegar aquí) y
+   muestra el aviso con un botón que el alumno puede pulsar directamente. */
+function verificarPantallaCompletaAlIniciar(){
+  if(!USAR_PANTALLA_COMPLETA) return;
+
+  if(!PANTALLA_COMPLETA_SOPORTADA){
+    // Ni siquiera vale la pena intentarlo: el navegador o el contexto en el
+    // que se abrió el examen (por ejemplo, embebido dentro de otra página
+    // sin el permiso "allow=fullscreen") no lo permite en absoluto. Se avisa
+    // una sola vez, se registra para el profesor, y el examen sigue normal.
+    registrarEvento("Este navegador/contexto no permite pantalla completa; el examen continúa sin ella.");
+    return;
+  }
+
+  setTimeout(()=>{
+    if(examenActivo && !document.fullscreenElement){
+      mostrarAvisoPantallaCompleta("nunca_inicio");
+    }
+  }, 700);
+}
+
 /* ---------- render y lógica del examen ---------- */
 function iniciarInterfazExamen(reanudando){
   examenActivo = true;
@@ -982,6 +1031,7 @@ function iniciarInterfazExamen(reanudando){
   if(USAR_PANTALLA_COMPLETA && PANTALLA_COMPLETA_SOPORTADA){
     document.documentElement.requestFullscreen().catch(()=>{ /* si el navegador lo impide, seguimos sin pantalla completa */ });
   }
+  verificarPantallaCompletaAlIniciar();
 
   const limiteTiempo = Math.min(sesionActual.inicio + DURACION_MINUTOS*60000, new Date(sesionActual.horarioCierre).getTime());
   iniciarCronometro(limiteTiempo);
@@ -1357,13 +1407,21 @@ document.addEventListener("fullscreenchange", ()=>{
   sesionActual.salidas++;
   registrarEvento(`Salida de pantalla completa #${sesionActual.salidas}.`);
   if(USAR_PANTALLA_COMPLETA){
-    document.getElementById("bloqueo-pantalla-completa").classList.remove("oculto");
+    mostrarAvisoPantallaCompleta("salida");
   }
 });
 document.getElementById("btn-volver-pantalla-completa").addEventListener("click", ()=>{
   // Este clic SÍ cuenta como acción directa del alumno, así que el navegador
   // permite volver a pedir pantalla completa desde aquí.
   document.documentElement.requestFullscreen().catch(()=>{});
+});
+document.getElementById("btn-continuar-sin-pantalla-completa").addEventListener("click", (evento)=>{
+  evento.preventDefault();
+  // Solo aparece cuando el intento automático nunca llegó a activarse (no
+  // cuando el alumno SALIÓ de una pantalla completa que ya estaba activa),
+  // así que aquí no se cuenta como salida: simplemente se deja continuar.
+  registrarEvento("El alumno eligió continuar sin pantalla completa.");
+  document.getElementById("bloqueo-pantalla-completa").classList.add("oculto");
 });
 
 /* ---------- sistema antifraude: copiar / cortar / pegar ---------- */
