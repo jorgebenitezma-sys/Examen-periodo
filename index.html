@@ -234,7 +234,6 @@
     <h2 id="bloqueo-pantalla-completa-titulo">⚠️ Saliste de pantalla completa</h2>
     <p id="bloqueo-pantalla-completa-texto">Esto quedó registrado. El examen sigue corriendo (el cronómetro no se detiene) mientras esta pantalla esté abierta.</p>
     <button id="btn-volver-pantalla-completa">🔒 Volver a pantalla completa</button>
-    <p id="link-continuar-sin-pantalla-completa" class="oculto" style="margin-top:14px;"><a href="#" id="btn-continuar-sin-pantalla-completa">Continuar sin pantalla completa</a></p>
   </div>
 </div>
 
@@ -325,9 +324,9 @@ const URL_GOOGLE_SHEETS = "https://script.google.com/macros/s/AKfycbykdVVbCJejD0
      momento (ver el comentario junto a "document.exitFullscreen()" dentro de
      la función "entregarExamen" más abajo).
 ------------------------------------------------------------------------------------- */
-const SEGUNDOS_SALIDA_SIGNIFICATIVA = 3;
-const LIMITE_SALIDAS_SOSPECHOSAS = 3;
-const LIMITE_SEGUNDOS_SOSPECHOSOS = 60;
+const SEGUNDOS_SALIDA_SIGNIFICATIVA = 2;
+const LIMITE_SALIDAS_SOSPECHOSAS = 2;
+const LIMITE_SEGUNDOS_SOSPECHOSOS = 5;
 const USAR_PANTALLA_COMPLETA = true;
 
 /* -------------------------------------------------------------------------------------
@@ -538,7 +537,7 @@ const EXAMEN = {
 let sesionActual = null;
 let examenActivo = false;
 let horaOculto = null;
-let horaFueraPantallaCompleta = null;
+let horaInicioBloqueo = null;
 let intervaloCronometro = null;
 let claveSesionActual = null;
 
@@ -968,20 +967,74 @@ function salirDePantallaCompleta(){
      espera, o simplemente porque el navegador decidió no concederla). En este
      caso se ofrece además la opción de continuar sin ella, para no dejar al
      alumno atorado si su navegador de verdad no coopera. */
-function mostrarAvisoPantallaCompleta(tipo){
-  const titulo = document.getElementById("bloqueo-pantalla-completa-titulo");
-  const texto = document.getElementById("bloqueo-pantalla-completa-texto");
-  const linkContinuar = document.getElementById("link-continuar-sin-pantalla-completa");
-  if(tipo === "nunca_inicio"){
-    titulo.textContent = "🔒 Activa la pantalla completa";
-    texto.textContent = "Este examen funciona mejor en pantalla completa, pero tu navegador no la activó automáticamente. Haz clic en el botón para activarla tú mismo (un clic directo sí lo permite).";
-    linkContinuar.classList.remove("oculto");
-  } else {
-    titulo.textContent = "⚠️ Saliste de pantalla completa";
-    texto.textContent = "Esto quedó registrado. El examen sigue corriendo (el cronómetro no se detiene) mientras esta pantalla esté abierta.";
-    linkContinuar.classList.add("oculto");
+/* Muestra el aviso de pantalla completa, bloqueando la interacción con el examen
+   (queda debajo de un fondo oscuro que cubre toda la pantalla) hasta que el
+   alumno haga clic en "Volver a pantalla completa". No tiene ninguna otra
+   salida a propósito: es el comportamiento que se pidió — cada vez que el
+   alumno sale de pantalla completa o cambia de pestaña/aplicación, el examen
+   se bloquea con este aviso y solo se desbloquea reactivando la pantalla
+   completa. La ÚNICA excepción es cuando el navegador del alumno NO soporta
+   la función de pantalla completa en absoluto (ver "PANTALLA_COMPLETA_SOPORTADA"
+   más abajo): ahí sería imposible desbloquearlo jamás, así que en ese caso no
+   se le exige nada y el examen sigue normal (y queda anotado en la bitácora). */
+function mostrarBloqueoPantallaCompleta(horaInicioReal){
+  // Arranca (si no estaba ya corriendo) el cronómetro de "tiempo fuera": cuenta
+  // desde que el alumno de verdad se fue (no desde que se muestra este aviso,
+  // que puede ser más tarde —por ejemplo, al regresar de otra pestaña—) hasta
+  // que lo resuelve (ver "resolverBloqueoPantallaCompleta"). Todo ese tiempo
+  // cuenta como "fuera del examen".
+  if(!horaInicioBloqueo){
+    horaInicioBloqueo = horaInicioReal || Date.now();
   }
+  document.getElementById("bloqueo-pantalla-completa-titulo").textContent = "⚠️ Saliste de pantalla completa";
+  document.getElementById("bloqueo-pantalla-completa-texto").textContent = "Esto quedó registrado como una salida. El examen sigue corriendo (el cronómetro no se detiene) mientras esta pantalla esté abierta. Haz clic en el botón para continuar.";
   document.getElementById("bloqueo-pantalla-completa").classList.remove("oculto");
+}
+
+/* Se llama en el único momento en que el bloqueo de verdad se resuelve: el
+   alumno hizo clic en "Volver a pantalla completa" y, o bien ya estaba en
+   pantalla completa, o el navegador se la concedió de nuevo. Aquí se cierra
+   la cuenta del tiempo que estuvo fuera (desde "mostrarBloqueoPantallaCompleta"
+   hasta ahora) y se suma a "tiempoFueraTotal", sin importar cuánto haya
+   durado ni cuántas veces haya parpadeado la pestaña mientras tanto. */
+function resolverBloqueoPantallaCompleta(){
+  bloqueoPorSalidaActivo = false;
+  if(horaInicioBloqueo){
+    const segundosFuera = Math.round((Date.now() - horaInicioBloqueo)/1000);
+    sesionActual.tiempoFueraTotal += segundosFuera;
+    horaInicioBloqueo = null;
+    registrarEvento(`Regresó al examen después de ${segundosFuera} segundos fuera/bloqueado.`);
+  }
+  document.getElementById("bloqueo-pantalla-completa").classList.add("oculto");
+}
+
+/* Evita contar dos veces la MISMA salida física del alumno cuando dos señales
+   distintas detectan un solo incidente en momentos distintos (por ejemplo, al
+   cambiar de aplicación con Alt+Tab: "fullscreenchange" se dispara al SALIR y
+   "visibilitychange" se dispara después, al REGRESAR — son el mismo incidente,
+   detectado por dos vías, no dos salidas). Mientras "bloqueoPorSalidaActivo"
+   sea true, cualquier nueva detección solo vuelve a mostrar el bloqueo, sin
+   sumar otra salida; se reinicia únicamente cuando el alumno de verdad
+   resuelve el bloqueo (ver "resolverBloqueoPantallaCompleta"). */
+let bloqueoPorSalidaActivo = false;
+function contarSalidaYBloquear(mensajeBitacora, segundosDetectadosSinBloqueo, horaInicioReal){
+  if(USAR_PANTALLA_COMPLETA){
+    if(!bloqueoPorSalidaActivo){
+      bloqueoPorSalidaActivo = true;
+      sesionActual.salidas++;
+      registrarEvento(mensajeBitacora);
+      actualizarContadorVisible();
+    }
+    mostrarBloqueoPantallaCompleta(horaInicioReal);
+  } else {
+    // Sin exigencia de pantalla completa no hay bloqueo que resolver con un
+    // clic, así que aquí el tiempo fuera se suma directo (lo que ya haya
+    // detectado quien llamó a esta función) y cada salida cuenta aparte.
+    sesionActual.salidas++;
+    sesionActual.tiempoFueraTotal += (segundosDetectadosSinBloqueo || 0);
+    registrarEvento(mensajeBitacora);
+    actualizarContadorVisible();
+  }
 }
 
 /* Se llama justo después de que "iniciarInterfazExamen" ya intentó pedir pantalla
@@ -1004,7 +1057,7 @@ function verificarPantallaCompletaAlIniciar(){
 
   setTimeout(()=>{
     if(examenActivo && !document.fullscreenElement){
-      mostrarAvisoPantallaCompleta("nunca_inicio");
+      mostrarBloqueoPantallaCompleta();
     }
   }, 700);
 }
@@ -1365,17 +1418,16 @@ document.addEventListener("visibilitychange", ()=>{
   if(document.hidden){
     horaOculto = Date.now();
   } else if(horaOculto){
+    const inicioReal = horaOculto;
     const segundosFuera = Math.round((Date.now() - horaOculto)/1000);
     horaOculto = null;
     if(segundosFuera >= SEGUNDOS_SALIDA_SIGNIFICATIVA){
-      sesionActual.salidas++;
-      sesionActual.tiempoFueraTotal += segundosFuera;
-      registrarEvento(`Salida de la pestaña #${sesionActual.salidas}: ${segundosFuera} segundos fuera.`);
-      // Advertencia visible: se muestra apenas el alumno regresa (mientras estuvo
-      // fuera no había forma de mostrarle nada, ya que no estaba viendo la página).
-      setTimeout(()=>{
-        alert(`⚠️ Se detectó que saliste de esta pestaña (salida #${sesionActual.salidas}, ${segundosFuera} segundos fuera).\n\nEsto ha quedado registrado y será revisado por tu profesor.`);
-      }, 150);
+      // El tiempo NO se suma aquí directamente: se bloquea el examen de
+      // inmediato con el mismo aviso que al salir de pantalla completa (no
+      // un simple alert()), y el tiempo TOTAL —contado desde que se fue,
+      // no desde que se muestra este aviso— se suma cuando el bloqueo se
+      // resuelva. Ver "resolverBloqueoPantallaCompleta".
+      contarSalidaYBloquear(`Salida de la pestaña/aplicación: ${segundosFuera} segundos fuera.`, segundosFuera, inicioReal);
     }
   }
 });
@@ -1387,13 +1439,7 @@ document.addEventListener("fullscreenchange", ()=>{
   if(document.fullscreenElement){
     // Confirmado: el examen SÍ está en pantalla completa en este navegador.
     pantallaCompletaFueActivada = true;
-    if(horaFueraPantallaCompleta){
-      const segundosFuera = Math.round((Date.now() - horaFueraPantallaCompleta)/1000);
-      sesionActual.tiempoFueraTotal += segundosFuera;
-      horaFueraPantallaCompleta = null;
-      registrarEvento(`Regresó a pantalla completa después de ${segundosFuera} segundos fuera.`);
-    }
-    document.getElementById("bloqueo-pantalla-completa").classList.add("oculto");
+    resolverBloqueoPantallaCompleta();
     return;
   }
 
@@ -1403,25 +1449,22 @@ document.addEventListener("fullscreenchange", ()=>{
   // por completo: no contamos una salida ni bloqueamos al alumno.
   if(!pantallaCompletaFueActivada) return;
 
-  horaFueraPantallaCompleta = Date.now();
-  sesionActual.salidas++;
-  registrarEvento(`Salida de pantalla completa #${sesionActual.salidas}.`);
-  if(USAR_PANTALLA_COMPLETA){
-    mostrarAvisoPantallaCompleta("salida");
-  }
+  contarSalidaYBloquear("Salida de pantalla completa.");
 });
 document.getElementById("btn-volver-pantalla-completa").addEventListener("click", ()=>{
+  if(document.fullscreenElement){
+    // Ya estaba en pantalla completa (por ejemplo, el aviso apareció por un
+    // cambio de pestaña/aplicación que nunca llegó a romperla de verdad): no
+    // hay nada que pedirle al navegador, solo se resuelve el bloqueo (y se
+    // suma el tiempo que estuvo fuera/bloqueado).
+    resolverBloqueoPantallaCompleta();
+    return;
+  }
   // Este clic SÍ cuenta como acción directa del alumno, así que el navegador
   // permite volver a pedir pantalla completa desde aquí.
-  document.documentElement.requestFullscreen().catch(()=>{});
-});
-document.getElementById("btn-continuar-sin-pantalla-completa").addEventListener("click", (evento)=>{
-  evento.preventDefault();
-  // Solo aparece cuando el intento automático nunca llegó a activarse (no
-  // cuando el alumno SALIÓ de una pantalla completa que ya estaba activa),
-  // así que aquí no se cuenta como salida: simplemente se deja continuar.
-  registrarEvento("El alumno eligió continuar sin pantalla completa.");
-  document.getElementById("bloqueo-pantalla-completa").classList.add("oculto");
+  document.documentElement.requestFullscreen().catch(()=>{
+    registrarEvento("El alumno intentó volver a pantalla completa y el navegador lo rechazó de nuevo.");
+  });
 });
 
 /* ---------- sistema antifraude: copiar / cortar / pegar ---------- */
