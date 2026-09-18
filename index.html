@@ -160,6 +160,11 @@
         <option value="">-- Selecciona tu grupo --</option>
       </select>
 
+      <label for="campo-profesor">Profesor(a)</label>
+      <select id="campo-profesor" required>
+        <option value="">-- Selecciona a tu profesor(a) --</option>
+      </select>
+
       <button type="submit">Entrar al examen</button>
       <p id="login-cargando" class="mensaje-info oculto">Verificando disponibilidad, espera un momento…</p>
       <p id="login-error" class="mensaje-error oculto"></p>
@@ -204,7 +209,7 @@
         <button id="btn-siguiente" type="button">Siguiente →</button>
       </div>
       <button id="btn-entregar" class="secundario" type="button" style="width:100%; margin-top:10px;">Entregar examen</button>
-      <p class="ayuda">Puedes moverte libremente entre preguntas con los botones o con el panel de números antes de entregar. Solo tienes un intento: una vez que entregues el examen no podrás modificarlo. Evita salir de esta pestaña, cambiar de aplicación, copiar/pegar texto o tomar capturas de pantalla; estas acciones quedan registradas y tu nombre aparece marcado sobre el examen.</p>
+      <p class="ayuda">Puedes moverte libremente entre preguntas con los botones o con el panel de números antes de entregar. Solo tienes un intento: una vez que entregues el examen no podrás modificarlo. Evita salir de esta pestaña, cambiar de aplicación (Alt+Tab / Cmd+Tab), copiar/pegar texto o tomar capturas de pantalla; estas acciones quedan registradas y tu nombre aparece marcado sobre el examen.</p>
     </div>
   </section>
 
@@ -273,6 +278,21 @@ const HORARIOS_GRUPOS = {
 };
 
 /* -------------------------------------------------------------------------------------
+   PASO 2-B. Profesores
+   - El alumno elige a su profesor(a) en la pantalla de inicio, junto con su grupo.
+   - Este dato NO cambia la calificación ni el contenido del examen: sirve para que,
+     en el comprobante en PDF y en la hoja de Google Sheets, cada registro quede
+     identificado con el profesor que lo va a revisar (útil cuando varios profesores
+     comparten la misma hoja de control).
+   - Puedes agregar, quitar o reordenar nombres libremente.
+------------------------------------------------------------------------------------- */
+const PROFESORES = [
+  "Jorge Benítez",
+  "Yoel Cala",
+  "Rosalía Preciado"
+];
+
+/* -------------------------------------------------------------------------------------
    PASO 3. Código maestro de reinicio
    - Sirve para que TÚ (el profesor) puedas dejar que un alumno reintente el examen
      en el MISMO dispositivo si tuvo un problema real (se cerró el navegador, se fue
@@ -330,9 +350,9 @@ const URL_GOOGLE_SHEETS = "https://script.google.com/macros/s/AKfycbykdVVbCJejD0
      Safari, moz de Firefox antiguo y ms de Edge/IE antiguos), así que
      funciona igual en Safari anterior a 16.4 que en los navegadores actuales.
 ------------------------------------------------------------------------------------- */
-const SEGUNDOS_SALIDA_SIGNIFICATIVA = 2;
-const LIMITE_SALIDAS_SOSPECHOSAS = 2;
-const LIMITE_SEGUNDOS_SOSPECHOSOS = 10;
+const SEGUNDOS_SALIDA_SIGNIFICATIVA = 3;
+const LIMITE_SALIDAS_SOSPECHOSAS = 3;
+const LIMITE_SEGUNDOS_SOSPECHOSOS = 60;
 const USAR_PANTALLA_COMPLETA = true;
 
 /* -------------------------------------------------------------------------------------
@@ -679,6 +699,17 @@ actualizarRelojHeader();
   });
 })();
 
+/* ---------- construir lista de profesores ---------- */
+(function poblarProfesores(){
+  const select = document.getElementById("campo-profesor");
+  PROFESORES.forEach(profesor=>{
+    const opcion = document.createElement("option");
+    opcion.value = profesor;
+    opcion.textContent = profesor;
+    select.appendChild(opcion);
+  });
+})();
+
 /* ---------- guardar / leer sesión en localStorage ---------- */
 function guardarSesion(){
   if(claveSesionActual && sesionActual){
@@ -833,6 +864,7 @@ function construirPayload(){
   const payload = {
     nombre: sesionActual.nombre,
     grupo: sesionActual.grupo,
+    profesor: sesionActual.profesor || "",
     horarioApertura: formatearFecha(sesionActual.horarioApertura),
     horarioCierre: formatearFecha(sesionActual.horarioCierre),
     horaInicio: formatearFecha(sesionActual.inicio),
@@ -905,9 +937,10 @@ document.getElementById("form-login").addEventListener("submit", async function(
 
   const nombre = document.getElementById("campo-nombre").value.trim();
   const grupo = document.getElementById("campo-grupo").value;
+  const profesor = document.getElementById("campo-profesor").value;
 
-  if(!nombre || !grupo){
-    errorLogin.textContent = "Completa tu nombre y grupo antes de continuar.";
+  if(!nombre || !grupo || !profesor){
+    errorLogin.textContent = "Completa tu nombre, grupo y profesor(a) antes de continuar.";
     errorLogin.classList.remove("oculto");
     return;
   }
@@ -978,7 +1011,7 @@ document.getElementById("form-login").addEventListener("submit", async function(
 
   claveSesionActual = clave;
   sesionActual = {
-    nombre, grupo,
+    nombre, grupo, profesor,
     horarioApertura: horario.apertura,
     horarioCierre: horario.cierre,
     inicio: Date.now(),
@@ -1158,7 +1191,7 @@ function iniciarInterfazExamen(reanudando){
   examenActivo = true;
   const datos = EXAMEN;
 
-  document.getElementById("info-alumno").textContent = `${sesionActual.nombre} — Grupo ${sesionActual.grupo}${reanudando ? " (intento reanudado)" : ""}`;
+  document.getElementById("info-alumno").textContent = `${sesionActual.nombre} — Grupo ${sesionActual.grupo}${sesionActual.profesor ? " — Prof. " + sesionActual.profesor : ""}${reanudando ? " (intento reanudado)" : ""}`;
   actualizarContadorVisible();
 
   const lecturaDiv = document.getElementById("lectura-contenedor");
@@ -1810,6 +1843,7 @@ function generarComprobantePDF(){
 
   pdfEscribirParrafo(`Alumno: ${sesionActual.nombre}`, { tamano: 11, negrita: true });
   pdfEscribirParrafo(`Grupo: ${sesionActual.grupo}`, { tamano: 11 });
+  pdfEscribirParrafo(`Profesor(a): ${textoPlanoPDF(sesionActual.profesor || "(no indicado)")}`, { tamano: 11 });
   pdfEscribirParrafo(`Hora de inicio: ${formatearFecha(sesionActual.inicio)}`, { tamano: 10 });
   pdfEscribirParrafo(`Hora de entrega: ${formatearFecha(sesionActual.horaEntrega)}`, { tamano: 10 });
   pdfEscribirParrafo(`Tiempo usado: ${formatearDuracionMs(sesionActual.horaEntrega - sesionActual.inicio)}`, { tamano: 10 });
