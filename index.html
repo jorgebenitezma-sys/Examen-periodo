@@ -350,9 +350,9 @@ const URL_GOOGLE_SHEETS = "https://script.google.com/macros/s/AKfycbykdVVbCJejD0
      Safari, moz de Firefox antiguo y ms de Edge/IE antiguos), así que
      funciona igual en Safari anterior a 16.4 que en los navegadores actuales.
 ------------------------------------------------------------------------------------- */
-const SEGUNDOS_SALIDA_SIGNIFICATIVA = 3;
-const LIMITE_SALIDAS_SOSPECHOSAS = 3;
-const LIMITE_SEGUNDOS_SOSPECHOSOS = 60;
+const SEGUNDOS_SALIDA_SIGNIFICATIVA = 1;
+const LIMITE_SALIDAS_SOSPECHOSAS = 2;
+const LIMITE_SEGUNDOS_SOSPECHOSOS = 2;
 const USAR_PANTALLA_COMPLETA = true;
 
 /* -------------------------------------------------------------------------------------
@@ -1180,9 +1180,16 @@ function verificarPantallaCompletaAlIniciar(){
   }
 
   setTimeout(()=>{
-    if(examenActivo && !elementoPantallaCompleta()){
-      mostrarBloqueoPantallaCompleta();
+    if(!examenActivo) return;
+    if(elementoPantallaCompleta()){
+      // Red de seguridad: el examen SÍ está en pantalla completa. Se deja
+      // constancia aquí también, por si el evento que lo confirmaba se
+      // disparó antes de que el examen arrancara y no lo alcanzamos a ver.
+      // Sin esto, una salida posterior podría pasar desapercibida.
+      pantallaCompletaFueActivada = true;
+      return;
     }
+    mostrarBloqueoPantallaCompleta();
   }, 700);
 }
 
@@ -1587,6 +1594,19 @@ document.addEventListener("visibilitychange", ()=>{
 
 /* ---------- sistema antifraude: salir de pantalla completa ---------- */
 alCambiarPantallaCompleta(()=>{
+  // PRIMERO, y sin ninguna condición: si en este momento el examen está en
+  // pantalla completa, se deja constancia de ello. Esto TIENE que hacerse antes
+  // de cualquier otra comprobación, porque la pantalla completa se solicita
+  // dentro del clic de "Entrar al examen" — es decir, un instante ANTES de que
+  // "examenActivo" se ponga en true. Si esta línea estuviera después de la
+  // comprobación de "examenActivo", ese primer evento se descartaría, la
+  // bandera se quedaría en false para siempre y, cuando el alumno saliera de
+  // pantalla completa, el sistema creería que nunca hubo pantalla completa de
+  // la cual salir: no lo detectaría, no lo bloquearía y no contaría la salida.
+  if(elementoPantallaCompleta()){
+    pantallaCompletaFueActivada = true;
+  }
+
   if(!examenActivo) return;
   // Si el alumno ya pulsó "Entregar examen", cualquier salida de pantalla
   // completa a partir de ese momento es consecuencia de la propia entrega
