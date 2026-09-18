@@ -209,7 +209,7 @@
         <button id="btn-siguiente" type="button">Siguiente →</button>
       </div>
       <button id="btn-entregar" class="secundario" type="button" style="width:100%; margin-top:10px;">Entregar examen</button>
-      <p class="ayuda">Puedes moverte libremente entre preguntas con los botones o con el panel de números antes de entregar. Solo tienes un intento: una vez que entregues el examen no podrás modificarlo. Evita salir de esta pestaña, cambiar de aplicación, copiar/pegar texto o tomar capturas de pantalla; estas acciones quedan registradas y tu nombre aparece marcado sobre el examen.</p>
+      <p class="ayuda">Puedes moverte libremente entre preguntas con los botones o con el panel de números antes de entregar. Solo tienes un intento: una vez que entregues el examen no podrás modificarlo. Evita salir de esta pestaña, cambiar de aplicación (Alt+Tab / Cmd+Tab), copiar/pegar texto o tomar capturas de pantalla; estas acciones quedan registradas y tu nombre aparece marcado sobre el examen.</p>
     </div>
   </section>
 
@@ -233,6 +233,22 @@
 </main>
 
 <div class="marca-agua" id="marca-agua"></div>
+
+<!-- ============ DIÁLOGO DE CONFIRMACIÓN DE ENTREGA ============
+     Es un diálogo hecho dentro de la propia página, NO el confirm() del
+     navegador. Motivo: en pantalla completa, Safari puede suprimir los cuadros
+     de diálogo nativos (el examen entonces "no se entregaba") y en otros
+     navegadores ese cuadro obliga a salir de pantalla completa, lo que se
+     registraba como una salida del alumno. Este diálogo no tiene ninguno de
+     esos dos problemas y se ve igual en todos los navegadores. -->
+<div class="bloqueo-pantalla-completa oculto" id="dialogo-entrega">
+  <div class="bloqueo-pantalla-completa-caja">
+    <h2 id="dialogo-entrega-titulo" style="color:var(--azul-marino);">¿Entregar el examen?</h2>
+    <p id="dialogo-entrega-texto"></p>
+    <button id="btn-confirmar-entrega">Sí, entregar</button>
+    <p style="margin-top:12px;"><a href="#" id="btn-cancelar-entrega">Cancelar y seguir contestando</a></p>
+  </div>
+</div>
 
 <div class="bloqueo-pantalla-completa oculto" id="bloqueo-pantalla-completa">
   <div class="bloqueo-pantalla-completa-caja">
@@ -352,7 +368,7 @@ const URL_GOOGLE_SHEETS = "https://script.google.com/macros/s/AKfycbykdVVbCJejD0
 ------------------------------------------------------------------------------------- */
 const SEGUNDOS_SALIDA_SIGNIFICATIVA = 1;
 const LIMITE_SALIDAS_SOSPECHOSAS = 2;
-const LIMITE_SEGUNDOS_SOSPECHOSOS = 2;
+const LIMITE_SEGUNDOS_SOSPECHOSOS = 3;
 const USAR_PANTALLA_COMPLETA = true;
 
 /* -------------------------------------------------------------------------------------
@@ -1494,37 +1510,25 @@ document.getElementById("btn-entregar").addEventListener("click", ()=>{
       `¿Quieres entregar de todas formas? Si cancelas, puedes usar el panel de números para regresar a completarlas.`;
   }
 
-  // Se marca ANTES del confirm(): en Safari el propio cuadro de diálogo saca
-  // al navegador de pantalla completa, y eso no debe contarse como salida.
-  entregaEnProceso = true;
-  const quiereEntregar = confirm(mensaje);
-  if(quiereEntregar){
-    entregarExamen(false);
-  } else {
-    // Canceló: sigue contestando. Si el diálogo llegó a romper la pantalla
-    // completa, se vuelve a pedir aquí mismo (este clic sigue contando como
-    // gesto directo del alumno).
-    if(USAR_PANTALLA_COMPLETA && PANTALLA_COMPLETA_SOPORTADA && !elementoPantallaCompleta()){
-      pedirPantallaCompleta().catch(()=>{});
-    }
-    // La vigilancia se reactiva con un pequeño retardo, NO de inmediato: los
-    // eventos de pantalla completa que provocó el propio cuadro de diálogo
-    // llegan un instante después (son asíncronos). Si se reactivara al
-    // instante, esos eventos rezagados se contarían como una salida del
-    // alumno y lo bloquearían injustamente por haber cancelado la entrega.
-    setTimeout(()=>{
-      entregaEnProceso = false;
-      // Si el navegador no concedió de vuelta la pantalla completa, el alumno
-      // quedaría fuera de ella y sin vigilancia. En ese caso se le muestra el
-      // bloqueo para que regrese con su propio clic. NO se le cuenta una
-      // salida: cancelar la entrega no es una falta, la pantalla la cerró el
-      // cuadro de diálogo del navegador.
-      if(examenActivo && USAR_PANTALLA_COMPLETA && PANTALLA_COMPLETA_SOPORTADA && !elementoPantallaCompleta()){
-        bloqueoPorSalidaActivo = true;
-        mostrarBloqueoPantallaCompleta();
-      }
-    }, 800);
-  }
+  // Se usa un diálogo PROPIO (dentro de la página), no el confirm() del
+  // navegador: en pantalla completa Safari puede suprimir los cuadros nativos
+  // (y entonces el examen nunca se entregaba), y en otros navegadores ese
+  // cuadro obliga a salir de pantalla completa. Este diálogo no toca la
+  // pantalla completa, así que tampoco hace falta silenciar la vigilancia.
+  document.getElementById("dialogo-entrega-texto").textContent = mensaje;
+  document.getElementById("dialogo-entrega").classList.remove("oculto");
+});
+
+document.getElementById("btn-confirmar-entrega").addEventListener("click", ()=>{
+  document.getElementById("dialogo-entrega").classList.add("oculto");
+  entregarExamen(false);
+});
+
+document.getElementById("btn-cancelar-entrega").addEventListener("click", (evento)=>{
+  evento.preventDefault();
+  // Solo se cierra el diálogo: el alumno sigue en pantalla completa y
+  // contestando con normalidad, sin que se le cuente nada.
+  document.getElementById("dialogo-entrega").classList.add("oculto");
 });
 
 /* ---------- marca de agua con los datos del alumno (disuasivo/rastreo de capturas) ---------- */
@@ -1570,6 +1574,55 @@ function iniciarCronometro(limiteTiempo){
   actualizar();
   intervaloCronometro = setInterval(actualizar, 1000);
 }
+
+/* ---------- sistema antifraude: pérdida de foco (pantalla dividida, ventanas lado a lado) ----------
+   NINGUNA librería ni API puede IMPEDIR la pantalla dividida: eso lo controla el
+   sistema operativo (Split View de macOS/iPad, "acoplar ventanas" de Windows,
+   Stage Manager, dos monitores…), y una página web no tiene permiso para
+   mandar sobre las ventanas del sistema. Lo que sí se puede es DETECTARLA.
+   La clave es que en pantalla dividida la página sigue VISIBLE — por eso
+   "visibilitychange" no se entera y ese era justo el hueco —, pero en cuanto
+   el alumno toca la otra aplicación, ESTA ventana pierde el foco. Ese es el
+   aviso que aquí se aprovecha: al perder el foco se tapa el examen de
+   inmediato (así deja de poder leerlo desde el otro lado de la pantalla
+   dividida) y se cuenta como salida, igual que salir de pantalla completa.
+   Se exige que la falta de foco dure un instante (VENTANA_GRACIA_FOCO_MS)
+   para no castigar toques accidentales ni el clic en la barra del navegador. */
+const VENTANA_GRACIA_FOCO_MS = 1200;
+let temporizadorFoco = null;
+let horaPerdidaFoco = null;
+
+window.addEventListener("blur", ()=>{
+  if(!examenActivo || entregaEnProceso) return;
+  if(horaPerdidaFoco) return; // ya se está midiendo esta misma pérdida de foco
+  horaPerdidaFoco = Date.now();
+
+  // Se tapa el examen AL INSTANTE (sin esperar), porque en pantalla dividida el
+  // alumno sigue viendo esta ventana mientras usa la otra: si no se tapara
+  // ahora, podría leer las preguntas desde la aplicación de al lado.
+  if(USAR_PANTALLA_COMPLETA && PANTALLA_COMPLETA_SOPORTADA){
+    mostrarBloqueoPantallaCompleta(horaPerdidaFoco);
+  }
+
+  temporizadorFoco = setTimeout(()=>{
+    if(!examenActivo || entregaEnProceso) return;
+    if(document.hasFocus()) return; // ya volvió: no fue una salida real
+    contarSalidaYBloquear("Pérdida de foco de la ventana (posible pantalla dividida o cambio de ventana).",
+                          Math.round((Date.now() - horaPerdidaFoco)/1000), horaPerdidaFoco);
+  }, VENTANA_GRACIA_FOCO_MS);
+});
+
+window.addEventListener("focus", ()=>{
+  if(temporizadorFoco){ clearTimeout(temporizadorFoco); temporizadorFoco = null; }
+  const fueBreve = horaPerdidaFoco && (Date.now() - horaPerdidaFoco) < VENTANA_GRACIA_FOCO_MS;
+  horaPerdidaFoco = null;
+  // Si la pérdida de foco fue muy breve y NO llegó a contarse como salida, se
+  // retira el aviso solo, para no estorbar por un toque accidental.
+  if(fueBreve && !bloqueoPorSalidaActivo && examenActivo){
+    horaInicioBloqueo = null;
+    document.getElementById("bloqueo-pantalla-completa").classList.add("oculto");
+  }
+});
 
 /* ---------- sistema antifraude: cambios de pestaña/ventana ---------- */
 document.addEventListener("visibilitychange", ()=>{
@@ -1726,6 +1779,8 @@ function posibleCambioVentana(evento){
 }
 document.addEventListener("keydown", posibleCambioVentana);
 
+
+
 /* ---------- calificación y entrega ---------- */
 function entregarExamen(autoEntregado){
   if(!examenActivo) { // ya se había entregado (por ejemplo, el cronómetro llegó a 0 dos veces)
@@ -1777,14 +1832,6 @@ function entregarExamen(autoEntregado){
   registrarEvento(autoEntregado ? "Examen entregado automáticamente (se acabó el tiempo)." : "Examen entregado por el alumno.");
   guardarSesion();
 
-  // IMPORTANTE: "examenActivo" ya se puso en false al inicio de esta función (arriba).
-  // Los listeners de "fullscreenchange" y "visibilitychange" revisan ese valor y se
-  // detienen de inmediato si es false, así que salir de pantalla completa AQUÍ (al
-  // entregar) nunca se cuenta como una salida sospechosa: el examen ya terminó.
-  if(elementoPantallaCompleta()){
-    cerrarPantallaCompletaNavegador();
-  }
-
   document.getElementById("texto-calificacion").textContent = `${puntosAutoObtenidos} / ${puntosAutoPosibles} pts automáticos`;
   document.getElementById("texto-detalle-resultado").innerHTML =
     `Puntos automáticos obtenidos (opción múltiple, selección múltiple, Verdadero/Falso y relacionar): <b>${puntosAutoObtenidos} de ${puntosAutoPosibles}</b>.<br>` +
@@ -1795,7 +1842,37 @@ function entregarExamen(autoEntregado){
   document.getElementById("aviso-calificacion-pendiente").classList.remove("oculto");
   mostrarSoloVista("vista-resultados");
 
+  // Salir de pantalla completa se hace AL FINAL, ya con la pantalla de
+  // resultados dibujada, y NO antes. Motivo: en Safari, salir de pantalla
+  // completa dispara una animación de transición; si el contenido de la
+  // página cambia durante esa animación, Safari puede quedarse mostrando una
+  // PANTALLA EN BLANCO hasta que algo lo obligue a repintar. Por eso primero
+  // se pinta el resultado, y hasta después se cierra la pantalla completa,
+  // forzando además un repintado por si acaso.
+  // ("examenActivo" ya es false y "entregaEnProceso" es true, así que esta
+  // salida nunca se cuenta como una salida sospechosa del alumno.)
+  if(elementoPantallaCompleta()){
+    cerrarPantallaCompletaNavegador();
+    setTimeout(forzarRepintado, 60);
+    setTimeout(forzarRepintado, 400);
+  }
+
   enviarAGoogleSheets();
+}
+
+/* Obliga al navegador a volver a dibujar la página. Es un remedio contra el
+   fallo de repintado de Safari al salir de pantalla completa (pantalla en
+   blanco). Leer "offsetHeight" fuerza al navegador a recalcular la
+   presentación en ese momento, y el evento "resize" hace que se reacomode. */
+function forzarRepintado(){
+  try{
+    const cuerpo = document.body;
+    cuerpo.style.opacity = "0.999";
+    void cuerpo.offsetHeight;   // fuerza el recálculo
+    cuerpo.style.opacity = "";
+    window.dispatchEvent(new Event("resize"));
+    window.scrollTo(0, 0);
+  }catch(error){ /* si algo falla aquí, no pasa nada: es solo un refuerzo visual */ }
 }
 
 document.getElementById("btn-reenviar").addEventListener("click", enviarAGoogleSheets);
